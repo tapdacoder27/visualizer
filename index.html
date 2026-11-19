@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Infinite Visualizer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --ink: #e8fff0;
+    --dim: #7fa593;
+    --panel: rgba(4, 14, 10, 0.82);
+    --line: rgba(120, 255, 170, 0.18);
+    --accent: #6dff9c;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  html, body { height: 100%; margin: 0; background: #000; overflow: hidden; }
+  body { font: 14px/1.4 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; color: var(--ink); }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: #000; z-index: 10; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .vignette { position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.65) 100%); }
+
+  .fab { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 12px; display: flex; gap: 8px; z-index: 20; transition: opacity .6s; }
+  .fab.idle { opacity: 0; pointer-events: none; }
+  .fab button { width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel);
+    color: var(--ink); font-size: 18px; cursor: pointer; backdrop-filter: blur(8px); }
+  .fab button:focus-visible, .panel button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(340px, 100%); z-index: 30;
+    padding: calc(env(safe-area-inset-top, 0px) + 14px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+    background: var(--panel); backdrop-filter: blur(14px); border-left: 1px solid var(--line);
+    overflow-y: auto; transform: translateX(100%); transition: transform .28s ease; box-sizing: border-box; }
+  .panel.open { transform: none; }
+  .panel h1 { font-size: 16px; font-weight: 600; margin: 0 0 2px; letter-spacing: .02em; }
+  .panel p.sub { margin: 0 0 14px; color: var(--dim); font-size: 12px; }
+  .group { margin: 16px 0 6px; font-size: 12px; color: var(--accent); font-weight: 600; }
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 8px; margin: 9px 0; }
+  .row label { color: var(--ink); }
+  .row output { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); margin: 2px 0 0; }
+  .row select { grid-column: 1 / -1; width: 100%; background: #04120c; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 9px; font: inherit; }
+  .check { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+  .check input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+  .btns button { padding: 11px 8px; border-radius: 10px; border: 1px solid var(--line); background: rgba(109,255,156,.08); color: var(--ink); font: inherit; cursor: pointer; }
+  .btns button:hover { background: rgba(109,255,156,.18); }
+  .hint { color: var(--dim); font-size: 12px; margin-top: 14px; }
+  @media (prefers-reduced-motion: reduce) { .panel, .fab { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Animated music visualizer"></canvas>
+<div class="vignette"></div>
+
+<div class="fab" id="fab">
+  <button id="bRand" title="Randomize (R)" aria-label="Randomize">&#10022;</button>
+  <button id="bFull" title="Fullscreen (F)" aria-label="Fullscreen">&#9974;</button>
+  <button id="bGear" title="Controls (H)" aria-label="Open controls">&#9776;</button>
+</div>
+
+<aside class="panel" id="panel" aria-label="Visualizer controls">
+  <h1>Infinite Visualizer</h1>
+  <p class="sub">Everything is live. Drag a slider and watch it change.</p>
+  <div id="controls"></div>
+  <div class="btns">
+    <button id="pRand">Randomize</button>
+    <button id="pReset">Reset</button>
+    <button id="pPause">Pause</button>
+    <button id="pClose">Close panel</button>
+  </div>
+  <p class="hint">Keys: Space pause, R randomize, F fullscreen, H controls, 1&ndash;5 switch shape.</p>
+</aside>
+
+<script>
+(function () {
+  "use strict";
+  var TAU = Math.PI * 2;
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d");
+  var W = 0, H = 0, DPR = 1;
+
+  /* ---------- settings ---------- */
+  var DEFAULTS = {
+    mode: "ribbons", palette: "xbox",
+    speed: 1, lines: 14, thickness: 2, glow: 0.7, trails: 0.9,
+    amplitude: 0.55, frequency: 2.4, wobble: 0.5, zoom: 1,
+    symmetry: 1, mirror: true, rotation: 0.06, pulse: 0.5,
+    hue: 0, cycle: 0.12, saturation: 90,
+    morph: false, morphTime: 25
+  };
+  var S = {}, k;
+  for (k in DEFAULTS) S[k] = DEFAULTS[k];
+  try {
+    var saved = JSON.parse(localStorage.getItem("infviz") || "null");
+    if (saved) for (k in DEFAULTS) if (saved[k] !== undefined) S[k] = saved[k];
+  } catch (e) {}
+  function persist() { try { localStorage.setItem("infviz", JSON.stringify(S)); } catch (e) {} }
+
+  var MODES = [
+    ["ribbons", "Ribbons (classic)"], ["spiral", "Spiral arms"], ["orbits", "Orbits"],
+    ["particles", "Particle streams"], ["rings", "Rings and polygons"]
+  ];
+  var PALETTES = [
+    ["xbox", "Console green"], ["ocean", "Deep ocean"], ["fire", "Ember"],
+    ["neon", "Neon night"], ["aurora", "Aurora"], ["sunset", "Sunset"],
+    ["rainbow", "Rainbow"], ["mono", "Ghost white"]
+  ];
+
+  var DEFS = [
+    ["g", "Look"],
+    ["s", "mode", "Shape", MODES],
+    ["s", "palette", "Colors", PALETTES],
+    ["g", "Motion"],
+    ["r", "speed", "Speed", 0, 4, 0.01],
+    ["r", "rotation", "Spin", -1, 1, 0.01],
+    ["r", "pulse", "Pulse (fake beat)", 0, 1, 0.01],
+    ["r", "wobble", "Complexity", 0, 1, 0.01],
+    ["g", "Shape"],
+    ["r", "lines", "Line count", 1, 40, 1],
+    ["r", "amplitude", "Size of waves", 0.1, 1.2, 0.01],
+    ["r", "frequency", "Wave frequency", 0.5, 8, 0.01],
+    ["r", "zoom", "Zoom", 0.4, 2, 0.01],
+    ["r", "symmetry", "Symmetry copies", 1, 12, 1],
+    ["c", "mirror", "Mirror every other copy"],
+    ["g", "Glow and color"],
+    ["r", "thickness", "Line thickness", 0.5, 8, 0.1],
+    ["r", "glow", "Glow", 0, 1, 0.01],
+    ["r", "trails", "Trail length", 0, 0.98, 0.01],
+    ["r", "hue", "Hue shift", 0, 360, 1],
+    ["r", "cycle", "Color cycling", 0, 1, 0.01],
+    ["r", "saturation", "Saturation", 0, 100, 1],
+    ["g", "Infinite mode"],
+    ["c", "morph", "Auto-change shape and colors"],
+    ["r", "morphTime", "Seconds between changes", 5, 90, 1]
+  ];
+
+  var inputs = {};
+  var controls = document.getElementById("controls");
+  function fmt(v, step) { return step >= 1 ? String(Math.round(v)) : Number(v).toFixed(2); }
+  DEFS.forEach(function (d) {
+    if (d[0] === "g") {
+      var g = document.createElement("div"); g.className = "group"; g.textContent = d[1]; controls.appendChild(g); return;
+    }
+    var key = d[1], el, out;
+    if (d[0] === "r") {
+      var row = document.createElement("div"); row.className = "row";
+      var lab = document.createElement("label"); lab.textContent = d[2]; lab.htmlFor = "i_" + key;
+      out = document.createElement("output"); out.textContent = fmt(S[key], d[5]);
+      el = document.createElement("input"); el.type = "range"; el.id = "i_" + key;
+      el.min = d[3]; el.max = d[4]; el.step = d[5]; el.value = S[key];
+      el.addEventListener("input", function () { S[key] = parseFloat(el.value); out.textContent = fmt(S[key], d[5]); onChange(key); });
+      row.appendChild(lab); row.appendChild(out); row.appendChild(el); controls.appendChild(row);
+      inputs[key] = { el: el, out: out, step: d[5] };
+    } else if (d[0] === "s") {
+      var row2 = document.createElement("div"); row2.className = "row";
+      var lab2 = document.createElement("label"); lab2.textContent = d[2]; lab2.htmlFor = "i_" + key;
+      el = document.createElement("select"); el.id = "i_" + key;
+      d[3].forEach(function (o) { var op = document.createElement("option"); op.value = o[0]; op.textContent = o[1]; el.appendChild(op); });
+      el.value = S[key];
+      el.addEventListener("change", function () { S[key] = el.value; onChange(key); });
+      row2.appendChild(lab2); row2.appendChild(document.createElement("span")); row2.appendChild(el); controls.appendChild(row2);
+      inputs[key] = { el: el };
+    } else if (d[0] === "c") {
+      var wrap = document.createElement("label"); wrap.className = "check";
+      el = document.createElement("input"); el.type = "checkbox"; el.checked = !!S[key];
+      el.addEventListener("change", function () { S[key] = el.checked; onChange(key); });
+      wrap.appendChild(el); wrap.appendChild(document.createTextNode(d[2])); controls.appendChild(wrap);
+      inputs[key] = { el: el };
+    }
+  });
+  function syncUI() {
+    for (var key in inputs) {
+      var i = inputs[key];
+      if (i.el.type === "checkbox") i.el.checked = !!S[key];
+      else { i.el.value = S[key]; if (i.out) i.out.textContent = fmt(S[key], i.step); }
+    }
+  }
+  function onChange(key) {
+    if (key === "mode" || key === "lines") initParticles();
+    persist();
+  }
+
+  /* ---------- colour ---------- */
+  function palette(name, p) {
+    var s = 0.5 + 0.5 * Math.sin(p * TAU);
+    switch (name) {
+      case "xbox":    return [92 + 78 * s, 1, 0.58];
+      case "ocean":   return [178 + 70 * s, 1, 0.58];
+      case "fire":    return [2 + 52 * s, 1, 0.56];
+      case "neon":    return [(s < 0.5 ? 175 + s * 60 : 280 + (s - 0.5) * 100), 1, 0.62];
+      case "aurora":  return [115 + 165 * s, 0.95, 0.6];
+      case "sunset":  return [(335 + 75 * s) % 360, 1, 0.62];
+      case "rainbow": return [(p * 360) % 360, 1, 0.6];
+      default:        return [160, 0, 0.9];
+    }
+  }
+  function col(p, a, lightBoost) {
+    var c = palette(S.palette, p);
+    var h = (c[0] + S.hue) % 360;
+    var sat = (S.saturation * c[1]);
+    var l = Math.min(96, (c[2] + (lightBoost || 0)) * 100);
+    return "hsla(" + h.toFixed(1) + "," + sat.toFixed(0) + "%," + l.toFixed(0) + "%," + a.toFixed(3) + ")";
+  }
+
+  /* ---------- strokes with fake glow ---------- */
+  function strokeGlow(p, alpha, width) {
+    var g = S.glow;
+    if (g > 0.01) {
+      ctx.lineWidth = width * 7; ctx.strokeStyle = col(p, 0.045 * g * alpha, 0); ctx.stroke();
+      ctx.lineWidth = width * 3; ctx.strokeStyle = col(p, 0.12 * g * alpha, 0); ctx.stroke();
+    }
+    ctx.lineWidth = width; ctx.strokeStyle = col(p, 0.85 * alpha, 0.12); ctx.stroke();
+  }
+
+  /* ---------- scene state ---------- */
+  var t = 0, spin = 0, beat = 0, paused = false;
+  var parts = [];
+  function initParticles() {
+    var n = Math.round(60 + S.lines * 22);
+    parts = [];
+    for (var i = 0; i < n; i++) parts.push(newPart(true));
+  }
+  function newPart(anywhere) {
+    var R = Math.max(W, H) * 0.5;
+    var a = Math.random() * TAU, r = anywhere ? Math.random() * R : Math.random() * R * 0.15;
+    return { x: Math.cos(a) * r, y: Math.sin(a) * r, px: 0, py: 0, life: 80 + Math.random() * 220, p: Math.random() };
+  }
+
+  /* ---------- scene drawers (centered coordinates) ---------- */
+  function drawRibbons(amp, th) {
+    var n = Math.round(S.lines), steps = 110;
+    var w = Math.max(W, H) * 1.05 * S.zoom, f = S.frequency, wob = S.wobble;
+    for (var i = 0; i < n; i++) {
+      var ph = n > 1 ? i / (n - 1) : 0.5;
+      ctx.beginPath();
+      for (var s = 0; s <= steps; s++) {
+        var u = s / steps;
+        var env = Math.pow(Math.sin(Math.PI * u), 0.8);
+        var v = Math.sin(u * f * TAU * 0.5 + t * 0.9 + ph * 2.6) * 0.55
+              + Math.sin(u * (f * 1.7) * TAU * 0.5 - t * 1.35 + ph * 4.1) * 0.3 * (0.4 + wob)
+              + Math.sin(u * (f * 3.9) * TAU * 0.5 + t * 2.2 + ph * 7) * 0.14 * wob;
+        var spread = (ph - 0.5) * 0.5 * Math.sin(u * TAU * 0.5 + t * 0.5) ;
+        var x = (u - 0.5) * w;
+        var y = (v * env + spread * env) * amp * H * 0.5;
+        if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      strokeGlow(ph + t * S.cycle * 0.2, 1, th);
+    }
+  }
+
+  function drawSpiral(amp, th) {
+    var n = Math.max(2, Math.round(S.lines / 2)), steps = 140;
+    var R = Math.min(W, H) * 0.62 * S.zoom, f = S.frequency, wob = S.wobble;
+    for (var i = 0; i < n; i++) {
+      var ph = i / n;
+      ctx.beginPath();
+      for (var s = 0; s <= steps; s++) {
+        var u = s / steps;
+        var r = u * R * (0.5 + amp * 0.8) * (1 + Math.sin(u * f * 5 + t * 1.6 + ph * 6) * 0.12 * wob);
+        var a = u * f * 1.6 + t * 0.7 + ph * TAU + Math.sin(u * 9 - t) * 0.25 * wob;
+        var x = Math.cos(a) * r, y = Math.sin(a) * r;
+        if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      strokeGlow(ph + t * S.cycle * 0.2, 1, th);
+    }
+  }
+
+  function drawOrbits(amp, th) {
+    var n = Math.round(S.lines), steps = 220;
+    var R = Math.min(W, H) * 0.5 * S.zoom * (0.4 + amp), f = S.frequency, wob = S.wobble;
+    for (var i = 0; i < n; i++) {
+      var ph = n > 1 ? i / (n - 1) : 0.5;
+      var fa = 1 + Math.floor(f * 0.6) + (i % 3), fb = 2 + Math.floor(f * 0.5) + ((i + 1) % 4);
+      ctx.beginPath();
+      for (var s = 0; s <= steps; s++) {
+        var a = (s / steps) * TAU;
+        var x = Math.sin(a * fa + t * 0.8 + ph * 1.7) * R * (1 - 0.25 * Math.sin(a * 3 + t) * wob);
+        var y = Math.sin(a * fb + t * 0.55 + ph * 2.9 + Math.sin(t * 0.4) * wob * 2) * R * 0.8;
+        if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      strokeGlow(ph + t * S.cycle * 0.2, 0.9, th * 0.8);
+    }
+  }
+
+  function drawParticles(amp, th, dt) {
+    var f = S.frequency * 0.0016, wob = S.wobble, sp = 90 * S.speed * (1 + beat * S.pulse * 1.2);
+    var R = Math.max(W, H) * 0.55 * S.zoom;
+    ctx.lineCap = "round";
+    for (var i = 0; i < parts.length; i++) {
+      var q = parts[i];
+      q.px = q.x; q.py = q.y;
+      var ang = Math.sin(q.x * f + t * 0.5) * 2.4 + Math.cos(q.y * f * 1.3 - t * 0.4) * 2.4 * (0.4 + wob) + t * 0.1;
+      q.x += Math.cos(ang) * sp * dt * (0.5 + amp);
+      q.y += Math.sin(ang) * sp * dt * (0.5 + amp);
+      q.life -= 60 * dt * Math.max(0.2, S.speed);
+      if (q.life <= 0 || q.x * q.x + q.y * q.y > R * R * 1.4) { parts[i] = newPart(false); continue; }
+      ctx.beginPath(); ctx.moveTo(q.px, q.py); ctx.lineTo(q.x, q.y);
+      var p = q.p + t * S.cycle * 0.2 + Math.hypot(q.x, q.y) / R * 0.3;
+      if (S.glow > 0.01) { ctx.lineWidth = th * 5; ctx.strokeStyle = col(p, 0.05 * S.glow, 0); ctx.stroke(); }
+      ctx.lineWidth = th * 1.1; ctx.strokeStyle = col(p, 0.9, 0.1); ctx.stroke();
+    }
+  }
+
+  function drawRings(amp, th) {
+    var n = Math.max(3, Math.round(S.lines)), sides = Math.max(3, Math.round(S.frequency * 1.5));
+    var R = Math.min(W, H) * 0.75 * S.zoom * (0.4 + amp * 0.9), wob = S.wobble;
+    for (var i = 0; i < n; i++) {
+      var ph = i / n;
+      var z = (ph + t * 0.07) % 1;
+      var r = Math.pow(z, 1.6) * R;
+      var rot = t * 0.4 + z * 3 * (0.3 + wob);
+      ctx.beginPath();
+      for (var s = 0; s <= sides * 6; s++) {
+        var a = (s / (sides * 6)) * TAU;
+        var wv = 1 + Math.sin(a * sides + t * 2 + z * 8) * 0.07 * (0.3 + wob);
+        var x = Math.cos(a + rot) * r * wv, y = Math.sin(a + rot) * r * wv;
+        if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      strokeGlow(ph + t * S.cycle * 0.2, Math.sin(Math.PI * z), th * (0.5 + z));
+    }
+  }
+
+  /* ---------- main loop ---------- */
+  var last = performance.now(), morphClock = 0;
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (!paused) {
+      t += dt * S.speed;
+      spin += dt * S.rotation * S.speed;
+      var b = 0.5 + 0.5 * Math.sin(t * 2.3);
+      var b2 = 0.5 + 0.5 * Math.sin(t * 3.7 + 1.3);
+      beat = Math.pow(b * b2, 2.2) * 2.2;
+      if (S.morph) {
+        morphClock += dt;
+        if (morphClock > S.morphTime) { morphClock = 0; autoMorph(); }
+      }
+
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = "rgba(0,0,0," + Math.max(0.02, 1 - S.trails).toFixed(3) + ")";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineJoin = "round"; ctx.lineCap = "round";
+
+      var amp = S.amplitude * (1 + beat * S.pulse * 0.35);
+      var th = S.thickness * (1 + beat * S.pulse * 0.6) * DPR;
+      var copies = Math.round(S.symmetry);
+      for (var c = 0; c < copies; c++) {
+        ctx.save();
+        ctx.setTransform(DPR, 0, 0, DPR, canvas.width / 2, canvas.height / 2);
+        ctx.rotate(spin + c * TAU / copies);
+        if (S.mirror && c % 2 === 1) ctx.scale(1, -1);
+        var thc = th / DPR;
+        switch (S.mode) {
+          case "spiral": drawSpiral(amp, thc); break;
+          case "orbits": drawOrbits(amp, thc); break;
+          case "particles": drawParticles(amp, thc, c === 0 ? dt : 0); break;
+          case "rings": drawRings(amp, thc); break;
+          default: drawRibbons(amp, thc);
+        }
+        ctx.restore();
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function autoMorph() {
+    var m = MODES[Math.floor(Math.random() * MODES.length)][0];
+    var p = PALETTES[Math.floor(Math.random() * PALETTES.length)][0];
+    S.mode = m; S.palette = p; S.hue = Math.floor(Math.random() * 360 * 0.3);
+    initParticles(); syncUI(); persist();
+  }
+
+  function randomize() {
+    function rr(a, b) { return a + Math.random() * (b - a); }
+    S.mode = MODES[Math.floor(Math.random() * MODES.length)][0];
+    S.palette = PALETTES[Math.floor(Math.random() * (PALETTES.length - 1))][0];
+    S.speed = rr(0.5, 2); S.lines = Math.round(rr(6, 28)); S.thickness = rr(1, 4);
+    S.glow = rr(0.4, 1); S.trails = rr(0.75, 0.95); S.amplitude = rr(0.3, 0.9);
+    S.frequency = rr(1, 6); S.wobble = rr(0.1, 1); S.zoom = rr(0.8, 1.3);
+    S.symmetry = Math.round(rr(1, 6)); S.rotation = rr(-0.4, 0.4); S.pulse = rr(0.2, 0.9);
+    S.hue = Math.round(rr(0, 120)); S.cycle = rr(0.03, 0.4);
+    initParticles(); syncUI(); persist();
+  }
+  function reset() { for (var k in DEFAULTS) S[k] = DEFAULTS[k]; initParticles(); syncUI(); persist(); }
+
+  /* ---------- sizing ---------- */
+  function resize() {
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  window.addEventListener("resize", resize);
+
+  /* ---------- UI wiring ---------- */
+  var panel = document.getElementById("panel"), fab = document.getElementById("fab");
+  var idleTimer;
+  function wake() {
+    fab.classList.remove("idle");
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(function () { if (!panel.classList.contains("open")) fab.classList.add("idle"); }, 3500);
+  }
+  ["mousemove", "touchstart", "keydown", "pointerdown"].forEach(function (e) { window.addEventListener(e, wake, { passive: true }); });
+  function togglePanel(open) {
+    var o = open === undefined ? !panel.classList.contains("open") : open;
+    panel.classList.toggle("open", o); wake();
+  }
+  function toggleFull() {
+    try {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else (document.documentElement.requestFullscreen || function () {}).call(document.documentElement);
+    } catch (e) {}
+  }
+  function togglePause() { paused = !paused; document.getElementById("pPause").textContent = paused ? "Resume" : "Pause"; last = performance.now(); }
+
+  document.getElementById("bGear").onclick = function () { togglePanel(); };
+  document.getElementById("bRand").onclick = randomize;
+  document.getElementById("bFull").onclick = toggleFull;
+  document.getElementById("pRand").onclick = randomize;
+  document.getElementById("pReset").onclick = reset;
+  document.getElementById("pPause").onclick = togglePause;
+  document.getElementById("pClose").onclick = function () { togglePanel(false); };
+  canvas.addEventListener("dblclick", toggleFull);
+
+  window.addEventListener("keydown", function (e) {
+    if (e.target && (e.target.tagName === "SELECT")) return;
+    var key = e.key.toLowerCase();
+    if (key === " ") { e.preventDefault(); togglePause(); }
+    else if (key === "r") randomize();
+    else if (key === "f") toggleFull();
+    else if (key === "h") togglePanel();
+    else if (key >= "1" && key <= "5") { S.mode = MODES[+key - 1][0]; initParticles(); syncUI(); persist(); }
+  });
+
+  resize(); initParticles(); wake();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
